@@ -1,0 +1,53 @@
+name: PR 4511 base-head tenant evidence
+on:
+  push:
+    branches: [evidence/4511-base-head-ci]
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  tenant-upload:
+    name: Tenant upload (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: unchanged-base
+            sha: b68ed4bf285a2b383b4c0d1cfab55ed807109c55
+          - name: revised-head
+            sha: 2be928f1041dfad40f4a97e662bb3c7ac50bbfac
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-pnpm
+        with:
+          node-version: '24.13'
+          cache-store: 'false'
+      - run: pnpm build
+      - name: Run identical tenant-upload test
+        shell: bash
+        run: |
+          set -o pipefail
+          node --version
+          git rev-parse HEAD
+          pnpm exec vitest run --project provider-integration test/integration/provider-scenarios/remote-proxy-artifact-fetch-tenant.test.ts 2>&1 | tee tenant-upload.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: tenant-upload-${{ matrix.name }}
+          path: tenant-upload.log
+          if-no-files-found: ignore
+      - name: Publish comparison status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ job.status }}
+          TESTED_SHA: ${{ matrix.sha }}
+        run: |
+          state=failure
+          if [ "$RESULT" = success ]; then state=success; fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/$TESTED_SHA" -f state="$state" -f context='evidence/tenant-upload' -f description='Base/head tenant-upload comparison; inspect logs for test vs infrastructure failures' -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
